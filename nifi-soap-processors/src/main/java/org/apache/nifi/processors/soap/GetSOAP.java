@@ -16,6 +16,16 @@
  */
 package org.apache.nifi.processors.soap;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import org.apache.axiom.om.OMAbstractFactory;
 import org.apache.axiom.om.OMElement;
 import org.apache.axiom.om.OMFactory;
@@ -25,9 +35,9 @@ import org.apache.axis2.Constants;
 import org.apache.axis2.addressing.EndpointReference;
 import org.apache.axis2.client.Options;
 import org.apache.axis2.client.ServiceClient;
-
 import org.apache.axis2.transport.http.HTTPConstants;
 import org.apache.axis2.transport.http.impl.httpclient3.HttpTransportPropertiesImpl;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.annotation.behavior.DynamicProperty;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.SupportsBatching;
@@ -49,113 +59,55 @@ import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.io.OutputStreamCallback;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.util.StopWatch;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.util.*;
-
 
 @SupportsBatching
 @InputRequirement(InputRequirement.Requirement.INPUT_FORBIDDEN)
-@Tags({"SOAP", "Get", "Ingest", "Ingress"})
-@CapabilityDescription("Execute provided request against the SOAP endpoint. The result will be left in it's orginal form. " +
-        "This processor can be scheduled to run on a timer, or cron expression, using the standard scheduling methods, " +
-        "or it can be triggered by an incoming FlowFile. If it is triggered by an incoming FlowFile, then attributes of " +
-        "that FlowFile will be available when evaluating the executing the SOAP request.")
+@Tags({ "SOAP", "Get", "Ingest", "Ingress" })
+@CapabilityDescription("Execute provided request against the SOAP endpoint. The result will be left in it's orginal form. "
+        + "This processor can be scheduled to run on a timer, or cron expression, using the standard scheduling methods, "
+        + "or it can be triggered by an incoming FlowFile. If it is triggered by an incoming FlowFile, then attributes of "
+        + "that FlowFile will be available when evaluating the executing the SOAP request.")
 @WritesAttribute(attribute = "mime.type", description = "Sets mime type to text/xml")
-@DynamicProperty(name = "The name of a input parameter the needs to be passed to the SOAP method being invoked.",
-        value = "The value for this parameter '=' and ',' are not considered valid values and must be escpaed . Note, if the value of parameter needs to be an array the format should be key1=value1,key2=value2.  ",
-        description = "The name provided will be the name sent in the SOAP method, therefore please make sure " +
-                "it matches the wsdl documentation for the SOAP service being called. In the case of arrays " +
-                "the name will be the name of the array and the key's specified in the value will be the element " +
-                "names pased.")
+@DynamicProperty(name = "The name of a input parameter the needs to be passed to the SOAP method being invoked.", value = "The value for this parameter '=' and ',' are not considered valid values and must be escpaed . Note, if the value of parameter needs to be an array the format should be key1=value1,key2=value2.  ", description = "The name provided will be the name sent in the SOAP method, therefore please make sure "
+        + "it matches the wsdl documentation for the SOAP service being called. In the case of arrays "
+        + "the name will be the name of the array and the key's specified in the value will be the element " + "names pased.")
 
 public class GetSOAP extends AbstractProcessor {
 
+    protected static final PropertyDescriptor ENDPOINT_URL = new PropertyDescriptor.Builder().name("Endpoint URL")
+            .description("The endpoint url that hosts the web service(s) that should be called.").required(true).expressionLanguageSupported(false)
+            .addValidator(StandardValidators.URL_VALIDATOR).build();
 
-    protected static final PropertyDescriptor ENDPOINT_URL = new PropertyDescriptor
-            .Builder()
-            .name("Endpoint URL")
-            .description("The endpoint url that hosts the web service(s) that should be called.")
-            .required(true)
-            .expressionLanguageSupported(false)
-            .addValidator(StandardValidators.URL_VALIDATOR)
-            .build();
+    protected static final PropertyDescriptor WSDL_URL = new PropertyDescriptor.Builder().name("WSDL URL")
+            .description("The url where the wsdl file can be retrieved and referenced.").required(true).expressionLanguageSupported(false)
+            .addValidator(StandardValidators.URL_VALIDATOR).build();
 
-    protected static final PropertyDescriptor WSDL_URL = new PropertyDescriptor
-            .Builder()
-            .name("WSDL URL")
-            .description("The url where the wsdl file can be retrieved and referenced.")
-            .required(true)
-            .expressionLanguageSupported(false)
-            .addValidator(StandardValidators.URL_VALIDATOR)
-            .build();
+    protected static final PropertyDescriptor METHOD_NAME = new PropertyDescriptor.Builder().name("SOAP Method Name")
+            .description("The method exposed by the SOAP webservice that should be invoked.").required(true).expressionLanguageSupported(false)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR).build();
 
-    protected static final PropertyDescriptor METHOD_NAME = new PropertyDescriptor
-            .Builder()
-            .name("SOAP Method Name")
-            .description("The method exposed by the SOAP webservice that should be invoked.")
-            .required(true)
-            .expressionLanguageSupported(false)
-            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
-            .build();
+    protected static final PropertyDescriptor USER_NAME = new PropertyDescriptor.Builder().name("User name").sensitive(true)
+            .description("The username to use in the case of basic Auth").required(false).expressionLanguageSupported(false)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR).build();
 
-    protected static final PropertyDescriptor USER_NAME = new PropertyDescriptor
-            .Builder()
-            .name("User name")
-            .sensitive(true)
-            .description("The username to use in the case of basic Auth")
-            .required(false)
-            .expressionLanguageSupported(false)
-            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
-            .build();
+    protected static final PropertyDescriptor PASSWORD = new PropertyDescriptor.Builder().name("Password").sensitive(true)
+            .description("The password to use in the case of basic Auth").required(false).expressionLanguageSupported(false)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR).build();
 
-    protected static final PropertyDescriptor PASSWORD = new PropertyDescriptor
-            .Builder()
-            .name("Password")
-            .sensitive(true)
-            .description("The password to use in the case of basic Auth")
-            .required(false)
-            .expressionLanguageSupported(false)
-            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
-            .build();
+    protected static final PropertyDescriptor USER_AGENT = new PropertyDescriptor.Builder().name("User Agent").defaultValue("NiFi SOAP Processor")
+            .description("The user agent string to use, the default is Nifi SOAP Processor").required(false).expressionLanguageSupported(false)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR).build();
 
+    protected static final PropertyDescriptor SO_TIMEOUT = new PropertyDescriptor.Builder().name("Socket Timeout").defaultValue("60000")
+            .description("The timeout value to use waiting for data from the webservice").required(false).expressionLanguageSupported(false)
+            .addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR).build();
 
-    protected static final PropertyDescriptor USER_AGENT = new PropertyDescriptor
-            .Builder()
-            .name("User Agent")
-            .defaultValue("NiFi SOAP Processor")
-            .description("The user agent string to use, the default is Nifi SOAP Processor")
-            .required(false)
-            .expressionLanguageSupported(false)
-            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
-            .build();
+    protected static final PropertyDescriptor CONNECTION_TIMEOUT = new PropertyDescriptor.Builder().name("Connection Timeout").defaultValue("60000")
+            .description("The timeout value to use waiting to establish a connection to the web service").required(false)
+            .expressionLanguageSupported(false).addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR).build();
 
-    protected static final PropertyDescriptor SO_TIMEOUT = new PropertyDescriptor
-            .Builder()
-            .name("Socket Timeout")
-            .defaultValue("60000")
-            .description("The timeout value to use waiting for data from the webservice")
-            .required(false)
-            .expressionLanguageSupported(false)
-            .addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR)
-            .build();
-
-    protected static final PropertyDescriptor CONNECTION_TIMEOUT = new PropertyDescriptor
-            .Builder()
-            .name("Connection Timeout")
-            .defaultValue("60000")
-            .description("The timeout value to use waiting to establish a connection to the web service")
-            .required(false)
-            .expressionLanguageSupported(false)
-            .addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR)
-            .build();
-
-
-    public static final Relationship REL_SUCCESS = new Relationship.Builder()
-            .name("success")
-            .description("All FlowFiles that are created are routed to this relationship")
-            .build();
-
+    public static final Relationship REL_SUCCESS = new Relationship.Builder().name("success")
+            .description("All FlowFiles that are created are routed to this relationship").build();
 
     private List<PropertyDescriptor> descriptors;
 
@@ -191,49 +143,58 @@ public class GetSOAP extends AbstractProcessor {
     @Override
     protected PropertyDescriptor getSupportedDynamicPropertyDescriptor(final String propertyDescriptorName) {
         return new PropertyDescriptor.Builder()
-                .description("Specifies the method name and parameter names and values for '" + propertyDescriptorName + "' the SOAP method being called.")
-                .name(propertyDescriptorName).addValidator(StandardValidators.NON_EMPTY_VALIDATOR).dynamic(true)
-                .build();
+                .description(
+                        "Specifies the method name and parameter names and values for '" + propertyDescriptorName + "' the SOAP method being called.")
+                .name(propertyDescriptorName).addValidator(StandardValidators.NON_EMPTY_VALIDATOR).dynamic(true).build();
     }
 
     @OnScheduled
     public void onScheduled(final ProcessContext context) {
-        Options options = new Options();
+        getLogger().debug("OnSchedule called, preparing ServiceClient");
 
-        final String endpointURL = context.getProperty(ENDPOINT_URL).getValue();
-        options.setTo(new EndpointReference(endpointURL));
-
-        if (isHTTPS(endpointURL)) {
-            options.setTransportInProtocol(Constants.TRANSPORT_HTTPS);
-        } else {
-            options.setTransportInProtocol(Constants.TRANSPORT_HTTP);
-        }
-
-        options.setCallTransportCleanup(true);
-        options.setProperty(HTTPConstants.CHUNKED, false);
-
-
-        options.setProperty(HTTPConstants.USER_AGENT, context.getProperty(USER_AGENT).getValue());
-        options.setProperty(HTTPConstants.SO_TIMEOUT, context.getProperty(SO_TIMEOUT).asInteger());
-        options.setProperty(HTTPConstants.CONNECTION_TIMEOUT, context.getProperty(CONNECTION_TIMEOUT).asInteger());
-        //get the username and password -- they both must be populated.
-
-        final String userName = context.getProperty(USER_NAME).getValue();
-        final String password = context.getProperty(PASSWORD).getValue();
-        if (null != userName && null != password && !userName.isEmpty() && !password.isEmpty()) {
-
-            HttpTransportPropertiesImpl.Authenticator
-                    auth = new HttpTransportPropertiesImpl.Authenticator();
-            auth.setUsername(userName);
-            auth.setPassword(password);
-            options.setProperty(org.apache.axis2.transport.http.HTTPConstants.AUTHENTICATE, auth);
-        }
         try {
+            // serviceClient = new ServiceClient(ConfigurationContextFactory.createConfigurationContextFromFileSystem(null , null), null);
             serviceClient = new ServiceClient();
+
+            Options options = serviceClient.getOptions();
+
+            // options.setAction(context.getProperty(METHOD_NAME).getValue());
+            // options.setProperty(Constants.Configuration.MESSAGE_TYPE,HTTPConstants.MEDIA_TYPE_APPLICATION_SOAP_XML);
+            // options.setProperty(Constants.Configuration.DISABLE_SOAP_ACTION,Boolean.TRUE);
+            // options.setProperty(HTTPConstants.CHUNKED, Constants.VALUE_FALSE);
+
+            final String endpointURL = context.getProperty(ENDPOINT_URL).getValue();
+            options.setTo(new EndpointReference(endpointURL));
+
+            if (isHTTPS(endpointURL)) {
+                options.setTransportInProtocol(Constants.TRANSPORT_HTTPS);
+            } else {
+                options.setTransportInProtocol(Constants.TRANSPORT_HTTP);
+            }
+
+            options.setCallTransportCleanup(true);
+            options.setProperty(HTTPConstants.CHUNKED, false);
+
+            options.setProperty(HTTPConstants.USER_AGENT, context.getProperty(USER_AGENT).getValue());
+            options.setProperty(HTTPConstants.SO_TIMEOUT, context.getProperty(SO_TIMEOUT).asInteger());
+            options.setProperty(HTTPConstants.CONNECTION_TIMEOUT, context.getProperty(CONNECTION_TIMEOUT).asInteger());
+            // get the username and password -- they both must be populated.
+
+            final String userName = context.getProperty(USER_NAME).getValue();
+            final String password = context.getProperty(PASSWORD).getValue();
+            if (null != userName && null != password && !userName.isEmpty() && !password.isEmpty()) {
+
+                HttpTransportPropertiesImpl.Authenticator auth = new HttpTransportPropertiesImpl.Authenticator();
+                auth.setUsername(userName);
+                auth.setPassword(password);
+                options.setProperty(org.apache.axis2.transport.http.HTTPConstants.AUTHENTICATE, auth);
+            }
+
             serviceClient.setOptions(options);
         } catch (AxisFault axisFault) {
-            getLogger().error("Failed to create webservice client, please check that the service endpoint is available and " +
-                    "the property is valid.", axisFault);
+            getLogger().error(
+                    "Failed to create webservice client, please check that the service endpoint is available and " + "the property is valid.",
+                    axisFault);
             throw new ProcessException(axisFault);
         }
     }
@@ -251,18 +212,37 @@ public class GetSOAP extends AbstractProcessor {
     @Override
     public void onTrigger(final ProcessContext context, final ProcessSession session) throws ProcessException {
 
+        // get the dynamic properties, execute the call and return the results
         final StopWatch stopWatch = new StopWatch(true);
-        //get the dynamic properties, execute the call and return the results
+
         OMFactory fac = OMAbstractFactory.getOMFactory();
-        OMNamespace omNamespace = fac.createOMNamespace(context.getProperty(WSDL_URL).getValue(), "nifi");
 
-        final OMElement method = getSoapMethod(fac, omNamespace, context.getProperty(METHOD_NAME).getValue());
+        final String fullSoapMethodName = context.getProperty(METHOD_NAME).getValue();
+        String soapMethodName = fullSoapMethodName;
 
-        //now we need to walk the arguments and add them
+        final OMNamespace omNamespace;
+        if (StringUtils.startsWithIgnoreCase(fullSoapMethodName, "http")) {
+            final int _1stBar = StringUtils.indexOf(fullSoapMethodName, "/", 7);
+            final int _2ndBar = StringUtils.indexOf(fullSoapMethodName, "/", _1stBar);
+
+            omNamespace = fac.createOMNamespace(StringUtils.substring(fullSoapMethodName, 0, _2ndBar), "nifi");
+            soapMethodName = StringUtils.substringAfterLast(fullSoapMethodName, "/");
+
+        } else {
+            omNamespace = fac.createOMNamespace(fullSoapMethodName, "nifi");
+        }
+
+        final OMElement method = getSoapMethod(fac, omNamespace, soapMethodName);
+
+        // now we need to walk the arguments and add them
         addArgumentsToMethod(context, fac, omNamespace, method);
+
         final OMElement result = executeSoapMethod(method);
+
         final FlowFile flowFile = processSoapRequest(session, result);
         session.transfer(flowFile, REL_SUCCESS);
+
+        getLogger().info(stopWatch.getDuration());
 
     }
 
@@ -315,11 +295,12 @@ public class GetSOAP extends AbstractProcessor {
         }
     }
 
-    OMElement getSoapMethod(OMFactory fac, OMNamespace omNamespace, String value) {
-        return fac.createOMElement(value, omNamespace);
+    protected OMElement getSoapMethod(OMFactory fac, OMNamespace omNamespace, String soapMethodName) {
+
+        return fac.createOMElement(soapMethodName, omNamespace);
     }
 
     private static boolean isHTTPS(final String url) {
-        return url.charAt(4) == ':';
+        return url.charAt(5) == ':';
     }
 }

@@ -16,6 +16,15 @@
  */
 package org.apache.nifi.processors.soap;
 
+import static org.mockserver.integration.ClientAndServer.startClientAndServer;
+import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
+
+import java.io.IOException;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+
 import org.apache.axiom.om.OMAbstractFactory;
 import org.apache.axiom.om.OMElement;
 import org.apache.axiom.om.OMFactory;
@@ -25,31 +34,18 @@ import org.apache.axiom.om.impl.llom.OMElementImpl;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.processor.Relationship;
-import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.util.MockFlowFile;
 import org.apache.nifi.util.TestRunner;
 import org.apache.nifi.util.TestRunners;
-import org.junit.*;
+import org.junit.After;
+import org.junit.AfterClass;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.Ignore;
+import org.junit.Test;
 import org.mockserver.client.server.MockServerClient;
 import org.mockserver.integration.ClientAndServer;
-import org.mockserver.junit.MockServerRule;
-import org.mockserver.model.Cookie;
-import org.mockserver.model.Delay;
-import org.mockserver.model.Header;
-import org.mockserver.model.Parameter;
-
-import java.io.IOException;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Set;
-
-import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.mockserver.integration.ClientAndServer.startClientAndServer;
-import static org.mockserver.matchers.Times.exactly;
-import static org.mockserver.model.HttpRequest.request;
-import static org.mockserver.model.HttpResponse.response;
-import static org.mockserver.model.StringBody.exact;
-import static org.mockito.Mockito.*;
 
 public class GetSOAPTest {
 
@@ -149,6 +145,30 @@ public class GetSOAPTest {
     }
 
     @Test
+    public void testSoapRequestToBematech() throws Exception {
+//        testRunner.setProperty(GetSOAP.CONNECTION_TIMEOUT, "");
+        testRunner.setProperty(GetSOAP.ENDPOINT_URL, "http://cloudservices.bematech.com.br/Live40/LiveConnector/FacadeIntegracao.svc");
+        testRunner.setProperty(GetSOAP.METHOD_NAME, "http://LiveConnector/IFacadeIntegracao/ObterChaveAcessoLC_Integracao");
+//        testRunner.setProperty(GetSOAP.PASSWORD, "");
+//        testRunner.setProperty(GetSOAP.SO_TIMEOUT, "");
+//        testRunner.setProperty(GetSOAP.USER_AGENT, "");
+//        testRunner.setProperty(GetSOAP.USER_NAME, "");
+        testRunner.setProperty(GetSOAP.WSDL_URL, "http://cloudservices.bematech.com.br/Live40/LiveConnector/FacadeIntegracao.svc?wsdl");
+
+        testRunner.setProperty("protectedDomain", "00000000-0000-0000-0000-000000000000");
+        testRunner.setProperty("publicDomain", "00000000-0000-0000-0000-000000000000");
+        testRunner.setProperty("CodigoSistemaSatelite", "220000251");
+        testRunner.setProperty("Usuario", "Integracao@natura_iris");
+        testRunner.setProperty("Senha", "123456");
+
+        testRunner.run();
+
+        final List<MockFlowFile> flowFiles = testRunner.getFlowFilesForRelationship(GetSOAP.REL_SUCCESS);
+        Assert.assertNotNull(flowFiles);
+
+    }
+    
+    @Test
     public void testHTTPUsernamePasswordProcessor() throws IOException {
 
 
@@ -162,13 +182,7 @@ public class GetSOAPTest {
                 "    </SOAP-ENV:Body>\n" +
                 "</SOAP-ENV:Envelope>";
 
-        new MockServerClient("127.0.0.1", 1080).when(request()
-                        .withMethod("POST")
-        )
-                .respond(
-                        response()
-                                .withBody(xmlBody)
-                );
+        new MockServerClient("127.0.0.1", 1080).when(request().withMethod("POST")).respond(response().withBody(xmlBody));
 
         testRunner.setProperty(GetSOAP.ENDPOINT_URL,"http://localhost:1080/test_path");
         testRunner.setProperty(GetSOAP.WSDL_URL,"http://localhost:1080/test_path.wsdl");
