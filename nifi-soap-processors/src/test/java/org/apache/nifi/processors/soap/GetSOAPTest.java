@@ -21,14 +21,21 @@ import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
+import java.util.function.Consumer;
+
+import javax.xml.namespace.QName;
 
 import org.apache.axiom.om.OMAbstractFactory;
 import org.apache.axiom.om.OMElement;
 import org.apache.axiom.om.OMFactory;
 import org.apache.axiom.om.OMNamespace;
+import org.apache.axiom.om.OMXMLBuilderFactory;
 import org.apache.axiom.om.impl.common.OMNamespaceImpl;
 import org.apache.axiom.om.impl.llom.OMElementImpl;
 import org.apache.nifi.components.PropertyDescriptor;
@@ -37,6 +44,7 @@ import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.util.MockFlowFile;
 import org.apache.nifi.util.TestRunner;
 import org.apache.nifi.util.TestRunners;
+import org.apache.tools.ant.filters.StringInputStream;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Assert;
@@ -53,6 +61,8 @@ public class GetSOAPTest {
 //    @Rule
 //    public MockServerRule mockServerRule = new MockServerRule(1080,this);
 
+    private Verify _verify = new Verify();
+    
     private static ClientAndServer mockServer;
    // private MockServerClient mockServerClient;
 
@@ -145,16 +155,35 @@ public class GetSOAPTest {
     }
 
     @Test
-    public void testSoapRequestToBematech() throws Exception {
-//        testRunner.setProperty(GetSOAP.CONNECTION_TIMEOUT, "");
+    public void test_String2XML() throws Exception {
+        InputStream in = new StringInputStream(_verify.getXmlTeste());
+        
+        OMElement root = OMXMLBuilderFactory.createOMBuilder(in).getDocumentElement();
+        
+        System.out.println("ROOT ELEMENT\n" + root);
+
+        // Process the content of the file
+//        OMElement urlElement = root.getFirstChildWithName(
+//                new QName("http://maven.apache.org/POM/4.0.0", "url"));
+//        if (urlElement == null) {
+//            System.out.println("No <url> element found");
+//        } else {
+//            System.out.println("url = " + urlElement.getText());
+//        }
+    }
+    
+    @Test
+    public void test_ObterChaveAcessoLC_Integracao() throws Exception {
+        // testRunner.setProperty(GetSOAP.CONNECTION_TIMEOUT, "");
         testRunner.setProperty(GetSOAP.ENDPOINT_URL, "http://cloudservices.bematech.com.br/Live40/LiveConnector/FacadeIntegracao.svc");
         testRunner.setProperty(GetSOAP.METHOD_NAME, "http://LiveConnector/IFacadeIntegracao/ObterChaveAcessoLC_Integracao");
-//        testRunner.setProperty(GetSOAP.PASSWORD, "");
-//        testRunner.setProperty(GetSOAP.SO_TIMEOUT, "");
-//        testRunner.setProperty(GetSOAP.USER_AGENT, "");
-//        testRunner.setProperty(GetSOAP.USER_NAME, "");
+        // testRunner.setProperty(GetSOAP.PASSWORD, "");
+        // testRunner.setProperty(GetSOAP.SO_TIMEOUT, "");
+        // testRunner.setProperty(GetSOAP.USER_AGENT, "");
+        // testRunner.setProperty(GetSOAP.USER_NAME, "");
         testRunner.setProperty(GetSOAP.WSDL_URL, "http://cloudservices.bematech.com.br/Live40/LiveConnector/FacadeIntegracao.svc?wsdl");
 
+        testRunner.setProperty(GetSOAP.PARAMETERS_ORDER, "protectedDomain, publicDomain, CodigoSistemaSatelite, Usuario, Senha");
         testRunner.setProperty("protectedDomain", "00000000-0000-0000-0000-000000000000");
         testRunner.setProperty("publicDomain", "00000000-0000-0000-0000-000000000000");
         testRunner.setProperty("CodigoSistemaSatelite", "220000251");
@@ -166,7 +195,50 @@ public class GetSOAPTest {
         final List<MockFlowFile> flowFiles = testRunner.getFlowFilesForRelationship(GetSOAP.REL_SUCCESS);
         Assert.assertNotNull(flowFiles);
 
+        _verify.printArgumentsAndContent(flowFiles.get(0));
+
     }
+    
+    @Test
+    public void test_RecuperarCupomFiscalLC_Integracao() throws Exception {
+        // testRunner.setProperty(GetSOAP.CONNECTION_TIMEOUT, "");
+        testRunner.setProperty(GetSOAP.ENDPOINT_URL, "http://cloudservices.bematech.com.br/Live40/LiveConnector/FacadeIntegracao.svc");
+        testRunner.setProperty(GetSOAP.METHOD_NAME, "http://LiveConnector/IFacadeIntegracao/RecuperarCupomFiscalLC_Integracao");
+        // testRunner.setProperty(GetSOAP.PASSWORD, "");
+        // testRunner.setProperty(GetSOAP.SO_TIMEOUT, "");
+        // testRunner.setProperty(GetSOAP.USER_AGENT, "");
+        // testRunner.setProperty(GetSOAP.USER_NAME, "");
+        testRunner.setProperty(GetSOAP.WSDL_URL, "http://cloudservices.bematech.com.br/Live40/LiveConnector/FacadeIntegracao.svc?wsdl");
+
+        //testRunner.setProperty(GetSOAP.PARAMETERS_ORDER, "protectedDomain, publicDomain, CodigoSistemaSatelite, Usuario, Senha");
+
+        // ATT RAIZ
+        testRunner.setProperty("protectedDomain", "00000000-0000-0000-0000-000000000000");
+        testRunner.setProperty("publicDomain", "00000000-0000-0000-0000-000000000000");
+        // ATT REN (http://schemas.datacontract.org/2004/07/Rentech.Framework.Data)
+        testRunner.setProperty("ClassID", "00000000-0000-0000-0000-000000000000");
+        testRunner.setProperty("Creation", "0001-01-01T00:00:00");
+        testRunner.setProperty("LastUpdate", "0001-01-01T00:00:00");
+        testRunner.setProperty("ObjectID", "00000000-0000-0000-0000-000000000000");
+        testRunner.setProperty("OwnerID", "00000000-0000-0000-0000-000000000000");
+        testRunner.setProperty("UserID", "00000000-0000-0000-0000-000000000000");
+        // ATT REN1 (http://schemas.datacontract.org/2004/07/Rentech.PracticoLive.Connector.Objects)
+        testRunner.setProperty("Chave", "b3c02efe-9e54-49a9-95b4-3af8f9475392");
+        testRunner.setProperty("CodigoSistemaSatelite", "220000251");
+        testRunner.setProperty("Data", "0001-01-01T00:00:00");
+        testRunner.setProperty("Hora", "0001-01-01T00:00:00");
+
+        testRunner.run();
+
+        final List<MockFlowFile> flowFiles = testRunner.getFlowFilesForRelationship(GetSOAP.REL_SUCCESS);
+        Assert.assertNotNull(flowFiles);
+
+        final MockFlowFile mockFlowFile = flowFiles.get(0);
+        _verify.printArgumentsAndContent(flowFiles.get(0));
+
+    }
+
+    
     
     @Test
     public void testHTTPUsernamePasswordProcessor() throws IOException {
@@ -371,4 +443,63 @@ public class GetSOAPTest {
 
     }
 
+    
+    private class Verify {
+        private Verify printArgumentsAndContent(MockFlowFile mockFlowFile) {
+            final Map<String, String> attributes = mockFlowFile.getAttributes();
+            System.out.println("============== FLOW FILE ============");
+            System.out.println("========================== ATTRIBUTES");
+            attributes.entrySet().stream().forEach(new Consumer<Entry<String, String>>() {
+                @Override
+                public void accept(Entry<String, String> t) {
+                    System.out.println(t.getKey() + "=" + t.getValue());
+                }
+            });
+            System.out.println("========================== CONTENT");
+            System.out.println(new String(mockFlowFile.toByteArray()));
+            System.out.println("=====================================");
+
+            return this;
+        }
+
+        public String getXmlTeste() {
+            final StringBuilder sb = new StringBuilder();
+//            sb.append("<soapenv:Envelope xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/' xmlns:liv='http://LiveConnector/' xmlns:ren='http://schemas.datacontract.org/2004/07/Rentech.Framework.Data' xmlns:ren1='http://schemas.datacontract.org/2004/07/Rentech.PracticoLive.Connector.Objects'>");
+//            sb.append("   <soapenv:Header/>");
+//            sb.append("   <soapenv:Body>");
+            sb.append("      <liv:RecuperarCupomFiscalLC_Integracao xmlns:liv='http://LiveConnector/' xmlns:ren='http://schemas.datacontract.org/2004/07/Rentech.Framework.Data' xmlns:ren1='http://schemas.datacontract.org/2004/07/Rentech.PracticoLive.Connector.Objects'>");
+            sb.append("         <!--Optional:-->");
+            sb.append("         <liv:publicDomain>00000000-0000-0000-0000-000000000000</liv:publicDomain>");
+            sb.append("         <!--Optional:-->");
+            sb.append("         <liv:protectedDomain>00000000-0000-0000-0000-000000000000</liv:protectedDomain>");
+            sb.append("         <!--Optional:-->");
+            sb.append("         <liv:identificacao>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren:ClassID>00000000-0000-0000-0000-000000000000</ren:ClassID>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren:Creation>0001-01-01T00:00:00</ren:Creation>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren:LastUpdate>0001-01-01T00:00:00</ren:LastUpdate>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren:ObjectID>00000000-0000-0000-0000-000000000000</ren:ObjectID>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren:OwnerID>00000000-0000-0000-0000-000000000000</ren:OwnerID>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren:UserID>00000000-0000-0000-0000-000000000000</ren:UserID>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren1:Chave>b3c02efe-9e54-49a9-95b4-3af8f9475392</ren1:Chave>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren1:CodigoSistemaSatelite>220000251</ren1:CodigoSistemaSatelite>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren1:Data>0001-01-01T00:00:00</ren1:Data>");
+            sb.append("            <!--Optional:-->");
+            sb.append("            <ren1:Hora>0001-01-01T00:00:00</ren1:Hora>");
+            sb.append("         </liv:identificacao>");
+            sb.append("      </liv:RecuperarCupomFiscalLC_Integracao>");
+//            sb.append("   </soapenv:Body>");
+//            sb.append("</soapenv:Envelope>");
+            return sb.toString();
+        }
+    }
+    
 }

@@ -17,6 +17,7 @@
 package org.apache.nifi.processors.soap;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,10 +27,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.axiom.om.OMAbstractFactory;
 import org.apache.axiom.om.OMElement;
-import org.apache.axiom.om.OMFactory;
-import org.apache.axiom.om.OMNamespace;
+import org.apache.axiom.om.OMXMLBuilderFactory;
 import org.apache.axis2.AxisFault;
 import org.apache.axis2.Constants;
 import org.apache.axis2.addressing.EndpointReference;
@@ -37,9 +36,6 @@ import org.apache.axis2.client.Options;
 import org.apache.axis2.client.ServiceClient;
 import org.apache.axis2.transport.http.HTTPConstants;
 import org.apache.axis2.transport.http.impl.httpclient3.HttpTransportPropertiesImpl;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.nifi.annotation.behavior.DynamicProperty;
-import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.SupportsBatching;
 import org.apache.nifi.annotation.behavior.WritesAttribute;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
@@ -47,7 +43,6 @@ import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.annotation.lifecycle.OnScheduled;
 import org.apache.nifi.annotation.lifecycle.OnStopped;
 import org.apache.nifi.components.PropertyDescriptor;
-import org.apache.nifi.components.PropertyValue;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.flowfile.attributes.CoreAttributes;
 import org.apache.nifi.logging.ComponentLog;
@@ -60,20 +55,17 @@ import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.io.OutputStreamCallback;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.util.StopWatch;
+import org.apache.tools.ant.filters.StringInputStream;
 
 @SupportsBatching
-@InputRequirement(InputRequirement.Requirement.INPUT_FORBIDDEN)
-@Tags({ "SOAP", "Get", "Ingest", "Ingress" })
+@Tags({ "SOAP", "Post", "Ingest", "Ingress", "XML", "Payload" })
 @CapabilityDescription("Execute provided request against the SOAP endpoint. The result will be left in it's orginal form. "
         + "This processor can be scheduled to run on a timer, or cron expression, using the standard scheduling methods, "
         + "or it can be triggered by an incoming FlowFile. If it is triggered by an incoming FlowFile, then attributes of "
         + "that FlowFile will be available when evaluating the executing the SOAP request.")
 @WritesAttribute(attribute = "mime.type", description = "Sets mime type to text/xml")
-@DynamicProperty(name = "The name of a input parameter the needs to be passed to the SOAP method being invoked.", value = "The value for this parameter '=' and ',' are not considered valid values and must be escpaed . Note, if the value of parameter needs to be an array the format should be key1=value1,key2=value2.  ", description = "The name provided will be the name sent in the SOAP method, therefore please make sure "
-        + "it matches the wsdl documentation for the SOAP service being called. In the case of arrays "
-        + "the name will be the name of the array and the key's specified in the value will be the element " + "names pased.")
 
-public class GetSOAP extends AbstractProcessor {
+public class PostSOAP extends AbstractProcessor {
 
     protected static final PropertyDescriptor ENDPOINT_URL = new PropertyDescriptor.Builder().name("Endpoint URL")
             .description("The endpoint url that hosts the web service(s) that should be called.").required(true).expressionLanguageSupported(false)
@@ -86,6 +78,10 @@ public class GetSOAP extends AbstractProcessor {
     protected static final PropertyDescriptor METHOD_NAME = new PropertyDescriptor.Builder().name("SOAP Method Name")
             .description("The method exposed by the SOAP webservice that should be invoked.").required(true).expressionLanguageSupported(false)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR).build();
+
+    protected static final PropertyDescriptor PAYLOAD_XML = new PropertyDescriptor.Builder().name("Payload XML").description(
+            "The xml that will be used as payload, it will be encapsulated with a SOAP envelope, so just put what is necessary for your method. Important note: put all namespaces needed within this piece of code.")
+            .required(true).expressionLanguageSupported(true).addValidator(StandardValidators.NON_EMPTY_VALIDATOR).build();
 
     protected static final PropertyDescriptor USER_NAME = new PropertyDescriptor.Builder().name("User name").sensitive(true)
             .description("The username to use in the case of basic Auth").required(false).expressionLanguageSupported(false)
@@ -107,12 +103,10 @@ public class GetSOAP extends AbstractProcessor {
             .description("The timeout value to use waiting to establish a connection to the web service").required(false)
             .expressionLanguageSupported(false).addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR).build();
 
-    protected static final PropertyDescriptor PARAMETERS_ORDER = new PropertyDescriptor.Builder().name("Parameter Order").sensitive(true).description(
-            "Some services need to put parameters in order, for that so you just need to list them within this parameter value (comma-separated). If specified, be sure that all dynamic parameters created are inside this field value. If not specified, random order will be applied. ")
-            .required(false).expressionLanguageSupported(false).addValidator(StandardValidators.NON_EMPTY_VALIDATOR).build();
-
     public static final Relationship REL_SUCCESS = new Relationship.Builder().name("success")
             .description("All FlowFiles that are created are routed to this relationship").build();
+
+    public static final Relationship REL_FAILURE = new Relationship.Builder().name("failure").description("Any unexpected error").build();
 
     private List<PropertyDescriptor> descriptors;
 
@@ -124,12 +118,12 @@ public class GetSOAP extends AbstractProcessor {
         descriptors.add(ENDPOINT_URL);
         descriptors.add(WSDL_URL);
         descriptors.add(METHOD_NAME);
+        descriptors.add(PAYLOAD_XML);
         descriptors.add(USER_NAME);
         descriptors.add(PASSWORD);
         descriptors.add(USER_AGENT);
         descriptors.add(SO_TIMEOUT);
         descriptors.add(CONNECTION_TIMEOUT);
-        descriptors.add(PARAMETERS_ORDER);
         this.descriptors = Collections.unmodifiableList(descriptors);
 
     }
@@ -138,20 +132,13 @@ public class GetSOAP extends AbstractProcessor {
     public Set<Relationship> getRelationships() {
         final Set<Relationship> relationships = new HashSet<>(1);
         relationships.add(REL_SUCCESS);
+        relationships.add(REL_FAILURE);
         return relationships;
     }
 
     @Override
     public final List<PropertyDescriptor> getSupportedPropertyDescriptors() {
         return descriptors;
-    }
-
-    @Override
-    protected PropertyDescriptor getSupportedDynamicPropertyDescriptor(final String propertyDescriptorName) {
-        return new PropertyDescriptor.Builder()
-                .description(
-                        "Specifies the method name and parameter names and values for '" + propertyDescriptorName + "' the SOAP method being called.")
-                .name(propertyDescriptorName).addValidator(StandardValidators.NON_EMPTY_VALIDATOR).dynamic(true).build();
     }
 
     @OnScheduled
@@ -164,10 +151,10 @@ public class GetSOAP extends AbstractProcessor {
 
             Options options = serviceClient.getOptions();
 
-             options.setAction(context.getProperty(METHOD_NAME).getValue());
-             options.setProperty(Constants.Configuration.MESSAGE_TYPE,HTTPConstants.MEDIA_TYPE_APPLICATION_SOAP_XML);
-//             options.setProperty(Constants.Configuration.DISABLE_SOAP_ACTION,Boolean.TRUE);
-//             options.setProperty(HTTPConstants.CHUNKED, Constants.VALUE_FALSE);
+            options.setAction(context.getProperty(METHOD_NAME).getValue());
+            options.setProperty(Constants.Configuration.MESSAGE_TYPE, HTTPConstants.MEDIA_TYPE_APPLICATION_SOAP_XML);
+            // options.setProperty(Constants.Configuration.DISABLE_SOAP_ACTION,Boolean.TRUE);
+            // options.setProperty(HTTPConstants.CHUNKED, Constants.VALUE_FALSE);
 
             final String endpointURL = context.getProperty(ENDPOINT_URL).getValue();
             options.setTo(new EndpointReference(endpointURL));
@@ -218,43 +205,34 @@ public class GetSOAP extends AbstractProcessor {
     @Override
     public void onTrigger(final ProcessContext context, final ProcessSession session) throws ProcessException {
 
-        // get the dynamic properties, execute the call and return the results
         final StopWatch stopWatch = new StopWatch(true);
 
-        OMFactory fac = OMAbstractFactory.getOMFactory();
+        FlowFile flowFile = session.get();
 
-        final String fullSoapMethodName = context.getProperty(METHOD_NAME).getValue();
-        String soapMethodName = fullSoapMethodName;
+        try {
+            final OMElement method = getSoapMethod(context, flowFile);
 
-        final OMNamespace omNamespace;
-        if (StringUtils.startsWithIgnoreCase(fullSoapMethodName, "http")) {
-            final int _1stBar = StringUtils.indexOf(fullSoapMethodName, "/", 7);
-            final int _2ndBar = StringUtils.indexOf(fullSoapMethodName, "/", _1stBar);
+            final OMElement result = executeSoapMethod(method);
 
-            omNamespace = fac.createOMNamespace(StringUtils.substring(fullSoapMethodName, 0, _2ndBar+1), "nifi");
-            soapMethodName = StringUtils.substringAfterLast(fullSoapMethodName, "/");
+            final FlowFile newFlowFile = processSoapRequest(session, result, flowFile);
+            session.transfer(newFlowFile, REL_SUCCESS);
 
-        } else {
-            omNamespace = fac.createOMNamespace(fullSoapMethodName, "nifi");
+        } catch (Exception e) {
+            getLogger().info(e.getMessage(), e);
+
+            flowFile = (flowFile == null) ? session.create() : flowFile;
+            session.transfer(flowFile, REL_FAILURE);
+
+        } finally {
+            getLogger().info(stopWatch.getDuration());
+
         }
-
-        final OMElement method = getSoapMethod(fac, omNamespace, soapMethodName);
-
-        // now we need to walk the arguments and add them
-        addArgumentsToMethod(context, fac, omNamespace, method);
-
-        final OMElement result = executeSoapMethod(method);
-
-        final FlowFile flowFile = processSoapRequest(session, result);
-        session.transfer(flowFile, REL_SUCCESS);
-
-        getLogger().info(stopWatch.getDuration());
 
     }
 
-    FlowFile processSoapRequest(ProcessSession session, final OMElement result) {
+    FlowFile processSoapRequest(ProcessSession session, final OMElement result, FlowFile flowFile) {
 
-        FlowFile intermediateFlowFile = session.create();
+        FlowFile intermediateFlowFile = (flowFile == null) ? session.create() : flowFile;
 
         intermediateFlowFile = session.write(intermediateFlowFile, new OutputStreamCallback() {
             @Override
@@ -287,43 +265,15 @@ public class GetSOAP extends AbstractProcessor {
         }
     }
 
-    void addArgumentsToMethod(ProcessContext context, OMFactory fac, OMNamespace omNamespace, OMElement method) {
-        final ComponentLog logger = getLogger();
+    protected OMElement getSoapMethod(ProcessContext context, FlowFile flowFile) {
 
-        final PropertyValue propOrder = context.getProperty(PARAMETERS_ORDER);
-        if (propOrder.isSet() && StringUtils.isNoneBlank(propOrder.getValue())) {
-            final String[] params = StringUtils.split(propOrder.getValue(), ',');
-            for (String param : params) {
-                final String trimmedParamName = StringUtils.trim(param);
-                
-                final PropertyValue propParam = context.getProperty(trimmedParamName);
-                final String paramValue = propParam.getValue();
+        final String payload = context.getProperty(PAYLOAD_XML).evaluateAttributeExpressions(flowFile).getValue();
 
-                if (null != logger)
-                    logger.debug("Processing dynamic property for ordered input: " + trimmedParamName + " with value: " + paramValue);
+        final InputStream in = new StringInputStream(payload);
 
-                OMElement value = getSoapMethod(fac, omNamespace, trimmedParamName);
-                value.addChild(fac.createOMText(value, paramValue));
-                method.addChild(value);
-            }
+        OMElement soapMethod = OMXMLBuilderFactory.createOMBuilder(in).getDocumentElement();
 
-        } else {
-            for (final Map.Entry<PropertyDescriptor, String> entry : context.getProperties().entrySet()) {
-                PropertyDescriptor descriptor = entry.getKey();
-                if (descriptor.isDynamic()) {
-                    if (null != logger)
-                        logger.debug("Processing dynamic property: " + descriptor.getName() + " with value: " + entry.getValue());
-                    OMElement value = getSoapMethod(fac, omNamespace, descriptor.getName());
-                    value.addChild(fac.createOMText(value, entry.getValue()));
-                    method.addChild(value);
-                }
-            }
-        }
-    }
-
-    protected OMElement getSoapMethod(OMFactory fac, OMNamespace omNamespace, String soapMethodName) {
-
-        return fac.createOMElement(soapMethodName, omNamespace);
+        return soapMethod;
     }
 
     private static boolean isHTTPS(final String url) {
